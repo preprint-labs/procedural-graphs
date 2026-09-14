@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "procedural-graphs"
+version = "0.1.0"
+description = "Paper-faithful Procedural Graph SDK (arXiv:2609.09153) with a FastMCP/CLI overlay"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+    "networkx",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.0.0",
+]
+dev = ["pytest"]
+
+[project.scripts]
+procedural-graphs = "procedural_graphs.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

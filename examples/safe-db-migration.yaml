@@ -1,0 +1,93 @@
+entry_id: Start
+nodes:
+  - id: Start
+    name: Start
+    description: Begin a schema change only after a recoverable backup exists.
+    kind: status
+  - id: backup_database
+    name: Backup Database
+    description: Take a restore-tested snapshot of the target database before any DDL.
+    kind: tool
+    allowed_tools:
+      - terminal
+    preconditions:
+      - Target environment and restore path are known
+    postconditions:
+      - Backup exists and restore was smoke-tested
+  - id: draft_schema_diff
+    name: Draft Schema Diff
+    description: Write an additive schema change and a matching rollback script.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+    preconditions:
+      - Backup exists and restore was smoke-tested
+    postconditions:
+      - Forward and rollback scripts are reviewed
+  - id: dry_run_migration
+    name: Dry-Run Migration
+    description: Apply the migration against a clone or transaction that can be rolled back.
+    kind: tool
+    allowed_tools:
+      - terminal
+    preconditions:
+      - Forward and rollback scripts are reviewed
+    postconditions:
+      - Dry-run completed without destructive surprises
+  - id: verify_foreign_keys
+    name: Verify Foreign Keys
+    description: Check constraints, indexes, and lock estimates before touching production.
+    kind: skill
+    allowed_tools:
+      - terminal
+      - read_file
+    preconditions:
+      - Dry-run completed without destructive surprises
+  - id: apply_and_seed
+    name: Apply & Seed
+    description: Apply the validated migration and seed only what the dry-run approved.
+    kind: tool
+    allowed_tools:
+      - terminal
+    terminal: true
+    preconditions:
+      - Foreign keys and lock estimates look safe
+    postconditions:
+      - Migration applied with backup still restorable
+edges:
+  - source: Start
+    target: backup_database
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: A schema change is required
+    guidance: Snapshot first. Do not draft or apply DDL until restore is proven.
+    pitfalls: Skipping backup because the change is "just additive."
+  - source: backup_database
+    target: draft_schema_diff
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Backup exists and a restore smoke-test succeeded
+    guidance: Prefer additive columns and dual-write windows. Pair every script with rollback.
+    pitfalls: DROP COLUMN, rewriting tables in place, or omitting a rollback script.
+  - source: draft_schema_diff
+    target: dry_run_migration
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Diff is additive (or an approved expand/contract step) with rollback
+    guidance: Dry-run on a clone that matches production volume. Measure lock time.
+    pitfalls: Dry-running against production, or skipping the dry-run to save time.
+  - source: dry_run_migration
+    target: verify_foreign_keys
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Dry-run applied cleanly and row counts match expectations
+    guidance: Confirm FKs, nullability, and index usage. Estimate whether apply will lock prod.
+    pitfalls: Ignoring FK failures or long ACCESS EXCLUSIVE locks on hot tables.
+  - source: verify_foreign_keys
+    target: apply_and_seed
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Constraints hold and lock estimates fit the maintenance window
+    guidance: Apply the exact dry-run script. Seed only data the dry-run already validated.
+    pitfalls: DROP COLUMN, locking production tables during peak traffic, skipping backup, or applying a different script than the dry-run.

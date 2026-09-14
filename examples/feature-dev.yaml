@@ -1,0 +1,92 @@
+entry_id: Start
+nodes:
+  - id: Start
+    name: Start
+    description: Begin a feature with a spec and tests before any implementation.
+    kind: status
+  - id: plan_spec
+    name: Plan & Spec
+    description: Read the ticket, write acceptance criteria, and freeze the change surface.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+    preconditions:
+      - Feature request or ticket exists
+    postconditions:
+      - Spec and acceptance criteria are written
+  - id: write_failing_tests
+    name: Write Failing Tests (TDD)
+    description: Add tests that encode the spec and fail on the current code.
+    kind: tool
+    allowed_tools:
+      - read_file
+      - terminal
+    preconditions:
+      - Spec and acceptance criteria are written
+    postconditions:
+      - Failing tests exist and have been run
+  - id: implement_code
+    name: Implement Code
+    description: Change production code only enough to satisfy the failing tests.
+    kind: tool
+    allowed_tools:
+      - read_file
+      - grep
+      - terminal
+    preconditions:
+      - Failing tests exist and have been run
+  - id: typecheck_lint
+    name: Typecheck & Lint
+    description: Run the project's typechecker and linter on the changed files.
+    kind: tool
+    allowed_tools:
+      - terminal
+    preconditions:
+      - Implementation compiled or saved
+  - id: verify_tests
+    name: Verify All Tests Pass
+    description: Re-run the full relevant test suite and stop only when it is green.
+    kind: skill
+    allowed_tools:
+      - terminal
+    terminal: true
+    postconditions:
+      - All relevant tests pass
+      - Typecheck and lint are clean
+edges:
+  - source: Start
+    target: plan_spec
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Work is a feature or bugfix, not a drive-by edit
+    guidance: Open the ticket and write a short spec before touching production code.
+    pitfalls: Starting in the editor because the change "looks obvious."
+  - source: plan_spec
+    target: write_failing_tests
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Acceptance criteria are written and reviewable
+    guidance: Translate each criterion into a test. Run the suite and confirm red.
+    pitfalls: Writing tests that already pass, or skipping tests because the spec feels clear.
+  - source: write_failing_tests
+    target: implement_code
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: New tests exist, have been executed, and fail for the right reason
+    guidance: Implement only after failing tests exist. Do not implement before that red run.
+    pitfalls: Coding first and backfilling tests; implementing while tests still have not been run.
+  - source: implement_code
+    target: typecheck_lint
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Production code was changed to address the failing tests
+    guidance: Keep the diff scoped to the spec. Then typecheck and lint before claiming done.
+    pitfalls: Expanding scope into drive-by refactors that have no tests.
+  - source: typecheck_lint
+    target: verify_tests
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Typecheck and lint are clean on the changed files
+    guidance: Re-run the full relevant suite. A single happy-path test is not enough.
+    pitfalls: Declaring the feature done after a typecheck with failing or skipped tests.

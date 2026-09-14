@@ -1,0 +1,29 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Python cache & build artifacts (Catches egg-info!)
+*.egg-info/
+*.egg
+__pycache__/
+*.py[cod]
+*$py.class
+dist/
+build/
+
+# Testing cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local anomaly dumps or test outputs
+*.anomaly.yaml
+test_sdk.py
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json
+.cursor/

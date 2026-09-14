@@ -1,0 +1,61 @@
+{
+  "entry_id": "Start",
+  "nodes": [
+    {
+      "id": "Start",
+      "name": "Start",
+      "description": "Entry status",
+      "kind": "status"
+    },
+    {
+      "id": "inspect",
+      "name": "inspect",
+      "description": "Inspect the target",
+      "kind": "tool",
+      "allowed_tools": ["inspect"]
+    },
+    {
+      "id": "apply",
+      "name": "apply",
+      "description": "Apply the change",
+      "kind": "tool",
+      "allowed_tools": ["apply"]
+    },
+    {
+      "id": "Done",
+      "name": "Done",
+      "description": "Terminal status",
+      "kind": "status",
+      "terminal": true
+    }
+  ],
+  "edges": [
+    {
+      "source": "Start",
+      "target": "inspect",
+      "relation": "LEADS_TO",
+      "condition": "job received",
+      "guidance": "Inspect before changing anything",
+      "pitfalls": "Skipping inspect",
+      "relation_type": "sequential"
+    },
+    {
+      "source": "inspect",
+      "target": "apply",
+      "relation": "LEADS_TO",
+      "condition": "inspection succeeded",
+      "guidance": "Apply the reviewed change",
+      "pitfalls": "Applying unreviewed diffs",
+      "relation_type": "conditional"
+    },
+    {
+      "source": "apply",
+      "target": "Done",
+      "relation": "LEADS_TO",
+      "condition": "apply succeeded",
+      "guidance": "Stop after a clean apply",
+      "pitfalls": "",
+      "relation_type": "sequential"
+    }
+  ]
+}
