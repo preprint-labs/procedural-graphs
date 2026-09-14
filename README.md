@@ -109,6 +109,7 @@ We provide turnkey SOPs in the `examples/` directory so you don't have to write 
 | **Feature Dev (TDD)** | Enforces test-first development before code generation | `examples/feature-dev.yaml` |
 | **Safe DB Migration** | Enforces snapshots, dry-runs, and lock checks | `examples/safe-db-migration.yaml` |
 | **Security Audit** | Enforces auth boundary verification and CVE checks | `examples/security-audit.yaml` |
+| **Service Deploy** | Enforces inventory, additive migration, canary cutover, soak verification, and rollback | `examples/deploy-playbook.yaml` |
 
 ---
 
