@@ -23,7 +23,7 @@ Procedural Graphs replace flat context histories with an explicit, evolving stat
 Requires **Python 3.11+**.
 
 ```bash
-git clone https://github.com/<YOUR-USERNAME-OR-ORG>/procedural-graphs.git
+git clone https://github.com/preprint-labs/procedural-graphs.git
 cd procedural-graphs
 
 # Create & activate a virtual environment
