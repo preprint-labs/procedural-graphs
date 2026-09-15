@@ -1,4 +1,4 @@
-"""Console entry: ``procedural-graphs serve --graph <playbook.yaml>``."""
+"""Console entry: ``procedural-graphs serve`` (optional ``--graph`` override)."""
 
 from __future__ import annotations
 
@@ -14,11 +14,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help="Run the FastMCP server for a playbook graph.")
+    serve = sub.add_parser("serve", help="Run the FastMCP server using the central playbook hub.")
     serve.add_argument(
         "--graph",
-        required=True,
-        help="Path to a YAML or JSON playbook (e.g. examples/deploy-playbook.yaml).",
+        default=None,
+        help=(
+            "Optional path to a YAML or JSON playbook. "
+            "When omitted, playbooks load from ~/.procedural-graphs/playbooks."
+        ),
     )
     return parser
 
@@ -27,7 +30,12 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "serve":
         from procedural_graphs.mcp_server import run_server
+        from procedural_graphs.storage import ensure_central_hub_initialized
 
+        ensure_central_hub_initialized()
+        if args.graph is None:
+            run_server()
+            return
         graph = Path(args.graph)
         if not graph.is_file():
             print(f"Playbook not found: {graph}", file=sys.stderr)

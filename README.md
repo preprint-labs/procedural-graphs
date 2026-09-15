@@ -73,7 +73,9 @@ result = agent.run("Deploy schema update")
 
 ### Editor Setup (Cursor & Claude Code)
 
-Serve a YAML playbook via MCP to give your editor's AI assistant live procedural guidance (`get_procedural_guidance`, `advance_procedure`, `report_procedural_anomaly`, `apply_graph_mutation`).
+Serve the **central playbook hub** via MCP. Playbooks live in `~/.procedural-graphs/playbooks/` (not in each git repo). On first run, bundled templates are copied there **only if a file of that name is missing** — user edits and `apply_graph_mutation` results are never overwritten. Session cursors are stored under `~/.procedural-graphs/sessions/`, keyed by repository, `task_id`, and playbook.
+
+Do not copy YAML into project trees. Cursor `mcp.json` does not need `--graph`.
 
 #### Cursor
 In your `.cursor/mcp.json` (or `cursor-settings.json`):
@@ -82,34 +84,35 @@ In your `.cursor/mcp.json` (or `cursor-settings.json`):
   "mcpServers": {
     "procedural-graphs": {
       "command": "<PATH_TO_VENV>/bin/python",
-      "args": [
-        "-m", "procedural_graphs.cli",
-        "serve",
-        "--graph", "examples/feature-dev.yaml"
-      ]
+      "args": ["-m", "procedural_graphs.cli", "serve"]
     }
   }
 }
 ```
 *(On Windows, use: `"C:\\path\\to\\.venv\\Scripts\\python.exe"`).*
 
+Optional: `--graph path/to/playbook.yaml` overrides the default playbook file for power users and tests. Named playbooks (e.g. `bugfix`) still resolve from the hub.
+
 #### Claude Code (Terminal)
 ```bash
-claude mcp add procedural-graphs -- <PATH_TO_VENV>/bin/python -m procedural_graphs.cli serve --graph examples/feature-dev.yaml
+claude mcp add procedural-graphs -- <PATH_TO_VENV>/bin/python -m procedural_graphs.cli serve
 ```
+
+Call `list_available_playbooks` to see hub stems, then `get_procedural_guidance(playbook="feature-dev", task_id="...")`. Mutations written by `apply_graph_mutation` update the central file, so learning in one repository is visible in another.
 
 ---
 
 ### Ready-Made Playbooks
 
-We provide turnkey SOPs in the `examples/` directory so you don't have to write YAML from scratch:
+Bundled templates ship inside the Python package (`procedural_graphs/default_playbooks/`) and seed the user hub. `examples/` in this repo is a browseable copy of the same schemas — it is not a per-project install path.
 
-| Playbook | Purpose | File |
+| Playbook | Purpose | Stem |
 | :--- | :--- | :--- |
-| **Feature Dev (TDD)** | Enforces test-first development before code generation | `examples/feature-dev.yaml` |
-| **Safe DB Migration** | Enforces snapshots, dry-runs, and lock checks | `examples/safe-db-migration.yaml` |
-| **Security Audit** | Enforces auth boundary verification and CVE checks | `examples/security-audit.yaml` |
-| **Service Deploy** | Enforces inventory, additive migration, canary cutover, soak verification, and rollback | `examples/deploy-playbook.yaml` |
+| **Feature Dev (TDD)** | Spec → failing tests → implement → verify | `feature-dev` |
+| **Bugfix** | Repro → diagnose → patch → test | `bugfix` |
+| **Safe DB Migration** | Snapshot → dry-run → migrate | `safe-db-migration` |
+| **Security Audit** | CVE scan, auth boundaries, secret check | `security-audit` |
+| **Service Deploy** | Inventory, additive migration, canary, soak, rollback | `deploy-playbook` |
 
 ---
 
@@ -127,6 +130,7 @@ The test suite in `tests/` verifies:
 * **Inference Guidance:** Node localization from trajectories and prompt compilation (`test_guidance.py`).
 * **Self-Evolution:** Offline LLM refiner loops, mutation validation, and rejection memory deduplication (`test_evolver.py`).
 * **MCP session helpers:** Agent-in-the-loop mutation apply/persist and anomaly recording without a live server (`test_mcp_session.py`).
+* **Central hub:** Copy-missing-only seed, playbook path fallback, task-scoped sessions, hub mutations, and `serve` without `--graph` (`test_storage.py`, `test_hub_sessions.py`, `test_cli.py`).
 
 ---
 

@@ -1,0 +1,109 @@
+entry_id: Start
+nodes:
+  - id: Start
+    name: Start
+    description: Begin a service migration deploy.
+    kind: status
+  - id: inventory
+    name: inventory
+    description: Inventory current service topology and freeze a deploy window.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+    preconditions:
+      - Change ticket is approved
+    postconditions:
+      - Inventory checklist is filled
+  - id: migrate_schema
+    name: migrate_schema
+    description: Apply the additive database migration.
+    kind: tool
+    allowed_tools:
+      - terminal
+    preconditions:
+      - Backups completed
+      - Inventory signed off
+  - id: cutover
+    name: cutover
+    description: Shift traffic to the new revision.
+    kind: tool
+    allowed_tools:
+      - terminal
+    preconditions:
+      - Schema migration succeeded
+  - id: verify
+    name: verify
+    description: Health-check the new revision and watch error budgets.
+    kind: skill
+    allowed_tools:
+      - terminal
+      - read_file
+  - id: rollback
+    name: rollback
+    description: Restore the previous revision if cutover is unhealthy.
+    kind: tool
+    allowed_tools:
+      - terminal
+  - id: Done
+    name: Done
+    description: Migration complete.
+    kind: status
+    terminal: true
+edges:
+  - source: Start
+    target: inventory
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Deploy window is open
+    guidance: List services, owners, and freeze flags before touching infra.
+    pitfalls: Skipping inventory hides blast radius.
+  - source: inventory
+    target: migrate_schema
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Inventory signed off and backups exist
+    guidance: Prefer additive migrations; keep a rollback script next to the change.
+    pitfalls: Destructive ALTER without backup.
+  - source: migrate_schema
+    target: cutover
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Migration applied and the app still reads old and new schema
+    guidance: Flip a small canary first.
+    pitfalls: Dual-write gaps.
+  - source: cutover
+    target: verify
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Canary looks healthy
+    guidance: Compare error rate and latency to the pre-deploy baseline.
+    pitfalls: Watching only the happy-path dashboard.
+  - source: cutover
+    target: rollback
+    relation: LEADS_TO
+    relation_type: fallback
+    condition: Instant 5xx spike on cutover
+    guidance: Abort the remainder of the cutover.
+    pitfalls: Continuing a bad cutover to "save" the window.
+  - source: verify
+    target: Done
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: SLOs hold for the soak window
+    guidance: Close the ticket with evidence links.
+    pitfalls: Declaring done before the soak window ends.
+  - source: verify
+    target: rollback
+    relation: LEADS_TO
+    relation_type: fallback
+    condition: Error-budget burn or failed health checks
+    guidance: Roll back immediately; do not keep iterating on the live canary.
+    pitfalls: Partial rollback that leaves split traffic.
+  - source: rollback
+    target: Done
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Previous revision is healthy
+    guidance: Record the failed trajectory for later graph evolution.
+    pitfalls: Closing the incident without a failed-trace record.

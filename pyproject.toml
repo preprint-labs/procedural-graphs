@@ -27,6 +27,9 @@ procedural-graphs = "procedural_graphs.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+procedural_graphs = ["default_playbooks/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

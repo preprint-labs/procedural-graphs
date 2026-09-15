@@ -1,4 +1,4 @@
-"""FastMCP overlay: soft playbook guidance over an in-process ProceduralGraph session."""
+"""FastMCP overlay: soft playbook guidance over hub-scoped ProceduralGraph sessions."""
 
 from __future__ import annotations
 
@@ -14,8 +14,16 @@ from procedural_graphs.graph import ProceduralGraph, StructuralValidationError
 from procedural_graphs.guidance import GuidanceEngine
 from procedural_graphs.io_yaml import load_graph, save_graph
 from procedural_graphs.schema import GraphMutation, GuidanceBlock, TrajectoryRecord, TrajectoryStep
+from procedural_graphs.storage import (
+    ensure_central_hub_initialized,
+    get_playbook_path,
+    list_central_playbooks,
+    load_state_cache,
+    save_state_cache,
+)
 
 TOOL_NAMES = (
+    "list_available_playbooks",
     "get_procedural_guidance",
     "advance_procedure",
     "report_procedural_anomaly",
@@ -39,6 +47,9 @@ class SessionState:
     failed_records: list[TrajectoryRecord] = field(default_factory=list)
     engine: GuidanceEngine = field(default_factory=GuidanceEngine)
     evolver: GraphEvolver | None = None
+    playbook: str = "feature-dev"
+    task_id: str = "default"
+    repo: str = ""
 
     def __post_init__(self) -> None:
         if self.cursor is None:
@@ -46,6 +57,101 @@ class SessionState:
         if self.evolver is None:
             # Rejection memory only; llm_callable is never invoked by MCP tools.
             self.evolver = GraphEvolver(llm_callable=lambda _prompt: "")
+
+
+class PlaybookSessionHub:
+    """In-memory sessions keyed by repo, task_id, and playbook; cursor cache on disk."""
+
+    def __init__(
+        self,
+        graph_override: str | Path | None = None,
+        repo: str | None = None,
+    ) -> None:
+        ensure_central_hub_initialized()
+        self.graph_override = (
+            Path(graph_override).expanduser().resolve() if graph_override is not None else None
+        )
+        self.repo = repo if repo is not None else str(Path.cwd().resolve())
+        self._sessions: dict[str, SessionState] = {}
+        self._task_playbook: dict[str, str] = {}
+
+    def resolve_path(self, playbook: str) -> Path:
+        if self.graph_override is not None and playbook in {
+            "feature-dev",
+            self.graph_override.stem,
+        }:
+            return self.graph_override
+        return get_playbook_path(playbook)
+
+    def session_key(self, task_id: str, playbook: str) -> str:
+        return f"{self.repo}::{task_id}::{playbook}"
+
+    def remember_playbook(self, task_id: str, playbook: str) -> None:
+        self._task_playbook[f"{self.repo}::{task_id}"] = playbook
+
+    def playbook_for_task(self, task_id: str, playbook: str | None) -> str:
+        if playbook:
+            return playbook
+        return self._task_playbook.get(f"{self.repo}::{task_id}", "feature-dev")
+
+    def get_session(self, playbook: str = "feature-dev", task_id: str = "default") -> SessionState:
+        key = self.session_key(task_id, playbook)
+        existing = self._sessions.get(key)
+        if existing is not None:
+            return existing
+        path = self.resolve_path(playbook)
+        session = SessionState(
+            graph=load_graph(path),
+            graph_path=path,
+            playbook=playbook,
+            task_id=task_id,
+            repo=self.repo,
+        )
+        cached = load_state_cache().get("sessions", {}).get(key)
+        if isinstance(cached, dict):
+            cursor = cached.get("cursor")
+            if isinstance(cursor, str) and session.graph.has_node(cursor):
+                session.cursor = cursor
+            raw_steps = cached.get("trajectory") or []
+            if isinstance(raw_steps, list):
+                session.trajectory = [TrajectoryStep.model_validate(step) for step in raw_steps]
+        self._sessions[key] = session
+        self.remember_playbook(task_id, playbook)
+        return session
+
+    def persist_session(self, session: SessionState) -> None:
+        cache = load_state_cache()
+        key = self.session_key(session.task_id, session.playbook)
+        cache.setdefault("sessions", {})[key] = {
+            "repo": session.repo,
+            "task_id": session.task_id,
+            "playbook": session.playbook,
+            "cursor": session.cursor,
+            "graph_path": str(session.graph_path),
+            "trajectory": [step.model_dump() for step in session.trajectory],
+        }
+        save_state_cache(cache)
+
+    def advance_procedure(
+        self,
+        next_step_id: str,
+        task_id: str = "default",
+        playbook: str | None = None,
+        evidence: str = "",
+    ) -> dict[str, Any]:
+        resolved_playbook = self.playbook_for_task(task_id, playbook)
+        session = self.get_session(playbook=resolved_playbook, task_id=task_id)
+        result = advance_cursor(session, next_step_id, evidence)
+        self.persist_session(session)
+        return result
+
+    def sync_graph(self, path: Path, graph: ProceduralGraph) -> None:
+        resolved = path.resolve()
+        for session in self._sessions.values():
+            if session.graph_path.resolve() == resolved:
+                session.graph = graph
+                if session.cursor and not session.graph.has_node(session.cursor):
+                    session.cursor = session.graph.start_id()
 
 
 def _block_to_json(block: GuidanceBlock) -> dict[str, Any]:
@@ -178,13 +284,92 @@ def apply_mutation(session: SessionState, mutation: Any) -> dict[str, Any]:
     }
 
 
-def create_session(graph_path: str | Path) -> SessionState:
-    path = Path(graph_path).expanduser().resolve()
-    return SessionState(graph=load_graph(path), graph_path=path)
+def advance_cursor(session: SessionState, next_step_id: str, evidence: str = "") -> dict[str, Any]:
+    """Move the playbook cursor along an outgoing edge; warn (do not crash) otherwise."""
+    resolved = _resolve_node_id(session.graph, next_step_id) or next_step_id
+    origin = session.cursor
+    neighbors = _outgoing_targets(session.graph, origin)
+    if resolved not in neighbors:
+        block = _compile(session)
+        return {
+            "ok": False,
+            "warning": (
+                f"{next_step_id!r} is not an outgoing neighbor of "
+                f"{origin!r}; cursor unchanged."
+            ),
+            "cursor": session.cursor,
+            "guidance": _block_to_json(block),
+        }
+    session.cursor = resolved
+    session.trajectory.append(
+        TrajectoryStep(
+            action=resolved,
+            tool_name=resolved,
+            observation=evidence or None,
+            status="advanced",
+        )
+    )
+    block = _compile(session)
+    return {
+        "ok": True,
+        "cursor": session.cursor,
+        "evidence": evidence,
+        "guidance": _block_to_json(block),
+    }
 
 
-def create_server(graph_path: str | Path, session: SessionState | None = None) -> Any:
-    """Build a FastMCP server bound to one in-process playbook session."""
+def list_available_playbooks() -> list[str]:
+    """Return hub playbook stems (e.g. feature-dev, bugfix)."""
+    return list_central_playbooks()
+
+
+def guidance_for(
+    hub: PlaybookSessionHub,
+    last_action: str | None = None,
+    playbook: str = "feature-dev",
+    task_id: str = "default",
+) -> dict[str, Any]:
+    session = hub.get_session(playbook=playbook, task_id=task_id)
+    hub.remember_playbook(task_id, playbook)
+    if last_action:
+        session.trajectory.append(
+            TrajectoryStep(action=last_action, tool_name=last_action, status="reported")
+        )
+    block = _compile(session)
+    payload = _block_to_json(block)
+    payload["cursor"] = session.cursor
+    payload["playbook"] = playbook
+    payload["task_id"] = task_id
+    hub.persist_session(session)
+    return payload
+
+
+def apply_hub_mutation(
+    hub: PlaybookSessionHub,
+    mutation: Any,
+    playbook: str = "feature-dev",
+) -> dict[str, Any]:
+    path = hub.resolve_path(playbook)
+    scratch = SessionState(graph=load_graph(path), graph_path=path, playbook=playbook)
+    result = apply_mutation(scratch, mutation)
+    if result.get("success"):
+        hub.sync_graph(path, scratch.graph)
+    return result
+
+
+def create_session(
+    graph_path: str | Path | None = None,
+    playbook: str = "feature-dev",
+) -> SessionState:
+    if graph_path is not None:
+        path = Path(graph_path).expanduser().resolve()
+    else:
+        path = get_playbook_path(playbook)
+    return SessionState(graph=load_graph(path), graph_path=path, playbook=playbook)
+
+
+def create_server(graph_path: str | Path | None = None, session: SessionState | None = None) -> Any:
+    """Build a FastMCP server bound to the central hub (optional path override)."""
     try:
         from mcp.server.mcpserver import MCPServer
     except ImportError:
@@ -195,68 +380,62 @@ def create_server(graph_path: str | Path, session: SessionState | None = None) -
                 "MCP is not installed. Install with: pip install 'procedural-graphs[mcp]'"
             ) from exc
 
-    state = session or create_session(graph_path)
+    ensure_central_hub_initialized()
+    hub = PlaybookSessionHub(graph_override=graph_path)
+    if session is not None:
+        hub._sessions[hub.session_key(session.task_id, session.playbook)] = session
+
     server = MCPServer("procedural-graphs")
 
     @server.tool()
-    def get_procedural_guidance(last_action: str | None = None) -> dict[str, Any]:
-        """Localize from the in-memory session and return soft 1–2 hop guidance JSON."""
-        if last_action:
-            state.trajectory.append(
-                TrajectoryStep(action=last_action, tool_name=last_action, status="reported")
-            )
-        block = _compile(state)
-        payload = _block_to_json(block)
-        payload["cursor"] = state.cursor
-        return payload
+    def list_available_playbooks() -> list[str]:
+        """List playbook stems in the central hub (~/.procedural-graphs/playbooks)."""
+        return list_central_playbooks()
 
     @server.tool()
-    def advance_procedure(next_step_id: str, evidence: str = "") -> dict[str, Any]:
+    def get_procedural_guidance(
+        last_action: str | None = None,
+        playbook: str = "feature-dev",
+        task_id: str = "default",
+    ) -> dict[str, Any]:
+        """Localize from the task-scoped session and return soft 1–2 hop guidance JSON."""
+        return guidance_for(hub, last_action=last_action, playbook=playbook, task_id=task_id)
+
+    @server.tool()
+    def advance_procedure(
+        next_step_id: str,
+        evidence: str = "",
+        task_id: str = "default",
+        playbook: str = "",
+    ) -> dict[str, Any]:
         """Move the playbook cursor along an outgoing edge; warn (do not crash) otherwise."""
-        resolved = _resolve_node_id(state.graph, next_step_id) or next_step_id
-        origin = state.cursor
-        neighbors = _outgoing_targets(state.graph, origin)
-        if resolved not in neighbors:
-            block = _compile(state)
-            return {
-                "ok": False,
-                "warning": (
-                    f"{next_step_id!r} is not an outgoing neighbor of "
-                    f"{origin!r}; cursor unchanged."
-                ),
-                "cursor": state.cursor,
-                "guidance": _block_to_json(block),
-            }
-        state.cursor = resolved
-        state.trajectory.append(
-            TrajectoryStep(
-                action=resolved,
-                tool_name=resolved,
-                observation=evidence or None,
-                status="advanced",
-            )
+        return hub.advance_procedure(
+            next_step_id,
+            task_id=task_id,
+            playbook=playbook or None,
+            evidence=evidence,
         )
-        block = _compile(state)
-        return {
-            "ok": True,
-            "cursor": state.cursor,
-            "evidence": evidence,
-            "guidance": _block_to_json(block),
-        }
 
     @server.tool()
-    def report_procedural_anomaly(issue_description: str) -> dict[str, Any]:
+    def report_procedural_anomaly(
+        issue_description: str,
+        task_id: str = "default",
+        playbook: str = "",
+    ) -> dict[str, Any]:
         """Record a failed trajectory; the host agent must propose apply_graph_mutation."""
-        return report_anomaly(state, issue_description)
+        resolved = hub.playbook_for_task(task_id, playbook or None)
+        return report_anomaly(hub.get_session(playbook=resolved, task_id=task_id), issue_description)
 
     @server.tool()
-    def apply_graph_mutation(mutation: Any) -> dict[str, Any]:
-        """Validate and persist one GraphMutation onto the active playbook YAML."""
-        return apply_mutation(state, mutation)
+    def apply_graph_mutation(mutation: Any, playbook: str = "feature-dev") -> dict[str, Any]:
+        """Validate and persist one GraphMutation onto the central hub playbook YAML."""
+        return apply_hub_mutation(hub, mutation, playbook=playbook)
 
-    server.procedural_session = state  # type: ignore[attr-defined]
+    server.procedural_hub = hub  # type: ignore[attr-defined]
+    server.procedural_session = session or hub.get_session()  # type: ignore[attr-defined]
     return server
 
 
-def run_server(graph_path: str | Path) -> None:
+def run_server(graph_path: str | Path | None = None) -> None:
+    ensure_central_hub_initialized()
     create_server(graph_path).run()

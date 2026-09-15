@@ -1,0 +1,79 @@
+entry_id: Start
+nodes:
+  - id: Start
+    name: Start
+    description: Begin a bugfix only after the failure can be reproduced.
+    kind: status
+  - id: reproduce
+    name: Reproduce
+    description: Capture a reliable repro (test, script, or recorded steps) that fails on current code.
+    kind: tool
+    allowed_tools:
+      - read_file
+      - grep
+      - terminal
+    preconditions:
+      - Bug report or failing behavior is described
+    postconditions:
+      - Repro exists and has been run
+  - id: diagnose
+    name: Diagnose
+    description: Narrow the root cause from the repro; do not patch until the cause is named.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+      - terminal
+    preconditions:
+      - Repro exists and has been run
+    postconditions:
+      - Root cause is written down
+  - id: patch
+    name: Patch
+    description: Change only the code needed to fix the diagnosed cause.
+    kind: tool
+    allowed_tools:
+      - read_file
+      - grep
+      - terminal
+    preconditions:
+      - Root cause is written down
+  - id: test
+    name: Test
+    description: Re-run the repro and the relevant suite; stop only when both are green.
+    kind: skill
+    allowed_tools:
+      - terminal
+    terminal: true
+    postconditions:
+      - Repro no longer fails
+      - Relevant tests pass
+edges:
+  - source: Start
+    target: reproduce
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: The work is a defect, not a new feature
+    guidance: Recreate the failure first. Prefer an automated test that is red for the right reason.
+    pitfalls: Jumping to a patch from a stack trace without a repro.
+  - source: reproduce
+    target: diagnose
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: The repro fails consistently
+    guidance: Trace from the failing assertion to the cause. Name the bug before editing production code.
+    pitfalls: Shotgun edits while the failure is still intermittent or unexplained.
+  - source: diagnose
+    target: patch
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Root cause is identified and scoped
+    guidance: Apply the smallest patch that addresses the cause. Avoid drive-by refactors.
+    pitfalls: Fixing a symptom or expanding scope into unrelated cleanup.
+  - source: patch
+    target: test
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Production code was changed for the diagnosed cause
+    guidance: Run the original repro and the relevant suite. A single happy-path check is not enough.
+    pitfalls: Declaring the bug fixed without re-running the repro.

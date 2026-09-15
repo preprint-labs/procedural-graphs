@@ -1,0 +1,80 @@
+entry_id: Start
+nodes:
+  - id: Start
+    name: Start
+    description: Begin a security pass before merging a refactor or dependency change.
+    kind: status
+  - id: scan_dependencies
+    name: Scan Dependencies (CVEs)
+    description: Audit lockfiles and manifests for known vulnerable packages.
+    kind: tool
+    allowed_tools:
+      - terminal
+      - read_file
+    preconditions:
+      - Dependency manifests are up to date in the working tree
+    postconditions:
+      - CVE scan report exists
+  - id: check_auth_boundaries
+    name: Check Auth Boundaries
+    description: Review authn/authz on new or moved routes, tools, and data access.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+    preconditions:
+      - CVE scan report exists
+    postconditions:
+      - Auth boundary review notes exist
+  - id: verify_no_secrets
+    name: Verify Zero Hardcoded Secrets
+    description: Search the diff and nearby config for keys, tokens, and credentials.
+    kind: tool
+    allowed_tools:
+      - grep
+      - read_file
+    preconditions:
+      - Auth boundary review notes exist
+    postconditions:
+      - Secret scan is clean or findings are filed
+  - id: propose_patch
+    name: Propose Patch
+    description: Propose dependency bumps, auth fixes, and secret removals with evidence.
+    kind: skill
+    allowed_tools:
+      - read_file
+      - grep
+    terminal: true
+    preconditions:
+      - Secret scan is clean or findings are filed
+    postconditions:
+      - Patch proposal lists CVE, auth, and secret outcomes
+edges:
+  - source: Start
+    target: scan_dependencies
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: The change adds, upgrades, or vendors dependencies, or is a refactor touching trust boundaries
+    guidance: Run the project's CVE/advisory scanner on lockfiles before reviewing code.
+    pitfalls: Trusting "no new packages" and skipping the scan during a refactor.
+  - source: scan_dependencies
+    target: check_auth_boundaries
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: CVE report is attached to the change
+    guidance: Trace every new endpoint and data path to an auth check. Compare to the pre-refactor boundary.
+    pitfalls: Assuming moved code keeps the same auth; shipping admin routes as public.
+  - source: check_auth_boundaries
+    target: verify_no_secrets
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Auth review recorded who can call each new or moved surface
+    guidance: Grep the diff for tokens, private keys, connection strings, and .env copies.
+    pitfalls: Leaving sample secrets that are real, or committing rotated keys "just for local."
+  - source: verify_no_secrets
+    target: propose_patch
+    relation: LEADS_TO
+    relation_type: sequential
+    condition: Secret scan is clean, or each finding has an owner and removal plan
+    guidance: Propose the smallest patch that closes CVEs, restores auth, and removes secrets.
+    pitfalls: Merging the refactor first and promising a follow-up security PR.

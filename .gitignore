@@ -21,6 +21,9 @@ htmlcov/
 *.anomaly.yaml
 test_sdk.py
 
+# Accidental local mirrors of the user hub (canonical hub is ~/.procedural-graphs)
+.procedural-graphs/
+
 # Editor & OS files
 .DS_Store
 Thumbs.db
